@@ -13,6 +13,7 @@
 11. Open a Julia session and run:
 ```julia
 ] activate ./TuringBot
+] instantiate
 ENV["GITHUB_USERNAME"] = "username"
 ENV["GITHUB_AUTH"] = "auth_token"
 ```
