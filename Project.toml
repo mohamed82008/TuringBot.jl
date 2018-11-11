@@ -1,6 +1,6 @@
-authors = ["mohamed82008 <mohamed82008@gmail.com>"]
 name = "TuringBot"
 uuid = "fdb19030-e02e-11e8-0643-bd39369e2578"
+authors = ["mohamed82008 <mohamed82008@gmail.com>"]
 version = "0.1.0"
 
 [deps]
