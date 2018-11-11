@@ -18,6 +18,7 @@ ENV["GITHUB_USERNAME"] = "username"
 ENV["GITHUB_AUTH"] = "auth_token"
 ```
 replacing `username` with your Github username, and `auth_token` with your unique access token. Make sure the token has commenting, push and pull request access.
+
 12. In the same Julia session, run:
 ```julia
 using TuringBot
