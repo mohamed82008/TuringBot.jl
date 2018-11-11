@@ -205,6 +205,6 @@ listener = GitHub.EventListener(auth = auth,
     return HTTP.Response(200)
 end
 
-listen() = GitHub.run(listener, IPv4(127,0,0,1), 8000)
+listen(port=8000) = GitHub.run(listener, IPv4(127,0,0,1), port)
 
 end # module
