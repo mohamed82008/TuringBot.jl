@@ -8,7 +8,7 @@ const authtoken = ENV["GITHUB_AUTH"]
 const auth = GitHub.authenticate(authtoken)
 
 const sourcerepo_name = "TuringLang/Turing.jl"
-const sinkrepo_name = "TuringLang/TuringBenchmarks.jl"
+const sinkrepo_name = "TuringLang/TuringBenchmarks"
 
 const sourcerepo = GitHub.Repo(sourcerepo_name)
 const listenrepos = [sourcerepo] # can be Repos or repo names
@@ -53,7 +53,7 @@ function find_pr(repo::GitHub.Repo, base, head)
     prs = GitHub.pull_requests(repo, auth=auth)[1]
     for i in 1:length(prs)
         pr = prs[i]
-        if pr.head.label == head && pr.base.label == base
+        if pr.head.ref == head && pr.base.ref == base
             return i
         end
     end
@@ -165,14 +165,14 @@ listener = GitHub.EventListener(auth = auth,
         errored, error_msg, make_pr, branch_name = update_remote([base_sha, sha])
         body = ""
         if errored
-            body *= "I could not schedule a benchmarking job."
+            body = "I could not schedule a benchmarking job."
             if error_msg != ""
                 body *= "\n\nError: \n ```julia \n $error_msg \n ```"
             else
                 body *= "\n\nError: unidentified"
             end
         elseif make_pr
-            body *= "This PR was automatically made by @TuringBenchBot."
+            body = "This PR was automatically made by @TuringBenchBot."
             params = Dict("title" => "Benchmarking $(snipsha(sha)) against $(snipsha(base_sha))", 
                 "head" => branch_name, "base" => "master", "body" => body, "maintainer_can_modify" => true)
             try
@@ -180,7 +180,7 @@ listener = GitHub.EventListener(auth = auth,
                 if i == 0
                     new_pr = GitHub.create_pull_request(Repo(sinkrepo_name); auth=auth, params=params)
                 else
-                    new_pr = GitHub.pull_requests(repo, auth=auth)[1][i]
+                    new_pr = GitHub.pull_requests(Repo(sinkrepo_name), auth=auth)[1][i]
                 end
                 body = "A benchmarking job has been scheduled in $(new_pr.html_url.uri)."
             catch err
@@ -189,7 +189,7 @@ listener = GitHub.EventListener(auth = auth,
                 else
                     error_msg = "Error"
                 end
-                body *= "I could not schedule a benchmarking job."
+                body = "I could not schedule a benchmarking job."
                 if error_msg != ""
                     body *= "\n\nError: \n ```julia \n $error_msg \n ```"
                 else
@@ -197,7 +197,7 @@ listener = GitHub.EventListener(auth = auth,
                 end
             end
         else
-            body *= "Commit $(snipsha(sha)) and commit $(snipsha(base_sha)) have already been benchmarked before."
+            body = "Commit $(snipsha(sha)) and commit $(snipsha(base_sha)) have already been benchmarked before."
         end
         params = Dict("body"=>body)
         GitHub.create_comment(repo, pr, :pr, params=params, auth=auth)
