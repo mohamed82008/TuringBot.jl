@@ -277,7 +277,7 @@ function TuringListener(github_listener::EventListener)
         filepath = joinpath(sha, filename)
         isdir(sha) || mkdir(sha)
         cd(sha) do
-            write(filename*".json", JSON.json(data))
+            write(filename*".json", JSON.json(data)*"\n")
         end
         return HTTP.Response(200)
     end
