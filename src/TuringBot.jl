@@ -238,7 +238,7 @@ function TuringListener(github_listener::EventListener)
             cd(results_dir)
             isdir(branch_name) || mkdir(branch_name)
             cd(branch_name)
-            return HTTP.Response(400)
+            return HTTP.Response(200)
         end
         if length(keys(data)) == 1 && haskey(data, "finish")
             branch_name = data["finish"]
@@ -259,10 +259,9 @@ function TuringListener(github_listener::EventListener)
                 params = Dict("body"=>body)
                 issue = GitHub.issue(repo, payload["issue"]["number"])
                 GitHub.create_comment(repo, issue, :issue, params=params, auth=auth)    
-                return HTTP.Response(400)    
             end
             logging[] = false
-            return HTTP.Response(400)
+            return HTTP.Response(200)
         end
 
         haskey(data, "turing") && haskey(data, "engine") || return
@@ -274,7 +273,7 @@ function TuringListener(github_listener::EventListener)
             filename = replace(filename, [')', '.'] => "")
             write(filename*".json", JSON.json(data))
         end
-        return HTTP.Response(400)
+        return HTTP.Response(200)
     end
 
     return TuringListener(github_listener, result_listener)
