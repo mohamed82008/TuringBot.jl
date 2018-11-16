@@ -273,7 +273,7 @@ function TuringListener(github_listener::EventListener)
         sha = snipsha(data["commit"])
         filename = join([data["name"], data["engine"]], "_")
         filename = replace(filename, [' ', ',', '('] => "_")
-        filename = replace(filename, [')', '.'] => "")
+        filename = replace(filename, [')', '.', ':'] => "")
         filepath = joinpath(sha, filename)
         isdir(sha) || mkdir(sha)
         cd(sha) do
