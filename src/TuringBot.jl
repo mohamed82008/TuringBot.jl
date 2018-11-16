@@ -13,6 +13,7 @@ const sinkrepo_name = "TuringLang/TuringBenchmarks"
 const sourcerepo = GitHub.Repo(sourcerepo_name)
 const listenrepos = [sourcerepo] # can be Repos or repo names
 const logging = Ref(false)
+const active_pr_number = Ref(0)
 
 snip(str, len) = str[1:min(len, end)]
 snipsha(sha) = snip(sha, 7)
@@ -88,7 +89,7 @@ function update_remote(shas)
         if :msg ∈ fieldnames(typeof(err))
             error_msg[] = err.msg
         else
-            error_msg[] = "Error"
+            error_msg[] = "Error checking out the branch $branch_name."
         end
         errored[] = true
     end
@@ -107,7 +108,7 @@ function update_remote(shas)
         if :msg ∈ fieldnames(typeof(err))
             error_msg[] = err.msg
         else
-            error_msg[] = "Error"
+            error_msg[] = "Error writing the bench_shas.txt file."
         end
         errored[] = true
     end
@@ -119,14 +120,14 @@ function update_remote(shas)
             try
                 gitpush!(temp_dir, sinkrepo_name, branch_name)
             catch
-                throw("Push failed.")
+                throw("Error pushing to remote.")
             end
             #rm(temp_path, recursive=true)
         catch err
             if :msg ∈ fieldnames(typeof(err))
                 error_msg[] = err.msg
             else
-                error_msg[] = "Error"
+                error_msg[] = "Error adding or committing changes."
             end
             errored[] = true
             make_pr[] = false
@@ -174,7 +175,7 @@ const github_listener = GitHub.EventListener(auth = auth,
         body = ""
         if errored
             body = "I could not schedule a benchmarking job."
-            if error_msg != "" && error_msg != "Error"
+            if error_msg != ""
                 body *= "\n\nError: \n ```julia \n $error_msg \n ```"
             else
                 body *= "\n\nError: unidentified"
@@ -191,15 +192,16 @@ const github_listener = GitHub.EventListener(auth = auth,
                 else
                     new_pr = GitHub.pull_requests(Repo(sinkrepo_name), auth=auth)[1][i]
                 end
+                active_pr_number[] = payload["issue"]["number"]
                 body = "A benchmarking job has been scheduled in $(new_pr.html_url.uri).\n\nCC: @mohamed82008"
             catch err
                 if :msg ∈ fieldnames(typeof(err))
                     error_msg = err.msg
                 else
-                    error_msg = "Error"
+                    error_msg = "Error creating a pull request."
                 end
                 body = "I could not schedule a benchmarking job."
-                if error_msg != "" && error_msg != "Error"
+                if error_msg != ""
                     body *= "\n\nError: \n ```julia \n $error_msg \n ```"
                 else
                     body *= "\n\nError: unidentified"
@@ -250,17 +252,14 @@ function TuringListener(github_listener::EventListener)
             gitcommit!(temp_dir; message="Add benchmarking results for $branch_name. [ci skip]")
             gitpush!(temp_dir, sinkrepo_name, branch_name)
             gitreset!(temp_dir, sinkrepo_name)
-            i = find_pr(Repo(sinkrepo_name), "master", branch_name)
-            if i > 0
-                pr = GitHub.pull_requests(Repo(sinkrepo_name), auth=auth)[1][i]
-                sinkrepo_url = repo(Repo(sinkrepo_name)).html_url.uri
-                report_url = join([sinkrepo_url, "tree", branch_name, "benchmark_results", branch_name], "/")
-                body = "Benchmarking job has completed. You can access the results from $report_url."
-                params = Dict("body"=>body)
-                issue = GitHub.issue(repo, payload["issue"]["number"])
-                GitHub.create_comment(repo, issue, :issue, params=params, auth=auth)    
-            end
+            sinkrepo_url = repo(Repo(sinkrepo_name)).html_url.uri
+            report_url = join([sinkrepo_url, "tree", branch_name, "benchmark_results", branch_name], "/")
+            body = "Benchmarking job has completed. You can access the results from $report_url."
+            params = Dict("body"=>body)
+            pr = GitHub.pull_request(Repo(sourcerepo_name), active_pr_number[])
+            GitHub.create_comment(Repo(sourcerepo_name), pr, :pr, params=params, auth=auth)
             logging[] = false
+            active_pr_number[] = 0
             return HTTP.Response(200)
         end
 
@@ -268,7 +267,7 @@ function TuringListener(github_listener::EventListener)
         sha = snipsha(data["commit"])
         isdir(sha) || mkdir(sha)
         cd(sha) do
-            filename = data["name"] * data["engine"]
+            filename = join([data["name"], data["engine"]], "_")
             filename = replace(filename, [' ', ',', '('] => "_")
             filename = replace(filename, [')', '.'] => "")
             write(filename*".json", JSON.json(data))
@@ -285,7 +284,7 @@ function Base.run(listener::TuringListener, host::HTTP.IPAddr, port::Int, args..
     HTTP.listen(host, port; kwargs...) do request::HTTP.Request
         response = listener.result_listener(request)
         response isa HTTP.Response && return response
-        listener.handle_request(request)
+        listener.github_listener.handle_request(request)
     end
 end
 
