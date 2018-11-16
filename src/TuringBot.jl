@@ -13,6 +13,7 @@ const sinkrepo_name = "TuringLang/TuringBenchmarks"
 const sourcerepo = GitHub.Repo(sourcerepo_name)
 const listenrepos = [sourcerepo] # can be Repos or repo names
 const logging = Ref(false)
+const started = Ref(false)
 const active_pr_number = Ref(0)
 
 snip(str, len) = str[1:min(len, end)]
@@ -227,6 +228,8 @@ function TuringListener(github_listener::EventListener)
     result_listener = (request) -> begin
         data = JSON.parse(IOBuffer(HTTP.payload(request)))
         if length(keys(data)) == 1 && haskey(data, "start")
+            logging[] && started[] && return HTTP.Response(204)
+            started[] = true
             branch_name = data["start"]
             temp_dir = ".log_" * splitdir(sinkrepo_name)[2]
             if isdir(temp_dir)
@@ -243,6 +246,7 @@ function TuringListener(github_listener::EventListener)
             return HTTP.Response(200)
         end
         if length(keys(data)) == 1 && haskey(data, "finish")
+            !(logging[] && started[]) && return HTTP.Response(204)
             branch_name = data["finish"]
             temp_dir = ".log_" * splitdir(sinkrepo_name)[2]
             cd(joinpath("..", "..", ".."))
@@ -260,16 +264,19 @@ function TuringListener(github_listener::EventListener)
             GitHub.create_comment(Repo(sourcerepo_name), pr, :pr, params=params, auth=auth)
             logging[] = false
             active_pr_number[] = 0
+            started[] = false
             return HTTP.Response(200)
         end
 
         haskey(data, "turing") && haskey(data, "engine") || return
+        logging[] && started[] || return HTTP.Response(204)
         sha = snipsha(data["commit"])
+        filename = join([data["name"], data["engine"]], "_")
+        filename = replace(filename, [' ', ',', '('] => "_")
+        filename = replace(filename, [')', '.'] => "")
+        filepath = joinpath(sha, filename)
         isdir(sha) || mkdir(sha)
         cd(sha) do
-            filename = join([data["name"], data["engine"]], "_")
-            filename = replace(filename, [' ', ',', '('] => "_")
-            filename = replace(filename, [')', '.'] => "")
             write(filename*".json", JSON.json(data))
         end
         return HTTP.Response(200)
