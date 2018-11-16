@@ -1,6 +1,6 @@
 module TuringBot
 
-using GitHub, HTTP, Sockets
+using GitHub, HTTP, Sockets, JSON
 
 # Authentication
 const username = ENV["GITHUB_USERNAME"]
@@ -12,6 +12,7 @@ const sinkrepo_name = "TuringLang/TuringBenchmarks"
 
 const sourcerepo = GitHub.Repo(sourcerepo_name)
 const listenrepos = [sourcerepo] # can be Repos or repo names
+const logging = Ref(false)
 
 snip(str, len) = str[1:min(len, end)]
 snipsha(sha) = snip(sha, 7)
@@ -59,6 +60,15 @@ function find_pr(repo::GitHub.Repo, base, head)
     end
     return 0
 end
+
+maintainers = ["xukai92",
+               "yebai",
+               "emilemathieu",
+               "trappmartin",
+               "cpfiffer",
+               "mohamed82008",
+               "willtebbutt",
+               "wesselb"]
 
 function update_remote(shas)
     temp_dir = ".temp_" * splitdir(sinkrepo_name)[2]
@@ -126,17 +136,8 @@ function update_remote(shas)
     return errored[], error_msg[], make_pr[], branch_name
 end
 
-maintainers = ["xukai92",
-               "yebai",
-               "emilemathieu",
-               "trappmartin",
-               "cpfiffer",
-               "mohamed82008",
-               "willtebbutt",
-               "wesselb"]
-
 events = ["issue_comment"]
-listener = GitHub.EventListener(auth = auth,
+const github_listener = GitHub.EventListener(auth = auth,
                                 repos = listenrepos,
                                 events = events) do event
     kind, payload, repo = event.kind, event.payload, event.repository
@@ -160,19 +161,27 @@ listener = GitHub.EventListener(auth = auth,
             GitHub.create_comment(repo, pr, :pr, params=params, auth=auth)
             return HTTP.Response(204)
         end
-        
+
+        if logging[]
+            body = "Server busy. Please try again later.\n\nCC: @mohamed82008"
+            params = Dict("body"=>body)
+            GitHub.create_comment(repo, pr, :pr, params=params, auth=auth)
+            return HTTP.Response(204)
+        end
+    
         sha = pr.head.sha
         errored, error_msg, make_pr, branch_name = update_remote([base_sha, sha])
         body = ""
         if errored
             body = "I could not schedule a benchmarking job."
-            if error_msg != ""
+            if error_msg != "" && error_msg != "Error"
                 body *= "\n\nError: \n ```julia \n $error_msg \n ```"
             else
                 body *= "\n\nError: unidentified"
             end
+            body *= "\n\nCC: @mohamed82008"
         elseif make_pr
-            body = "This PR was automatically made by @TuringBenchBot."
+            body = "This PR was automatically made by @TuringBenchBot.\n\nCC: @mohamed82008"
             params = Dict("title" => "Benchmarking $(snipsha(sha)) against $(snipsha(base_sha))", 
                 "head" => branch_name, "base" => "master", "body" => body, "maintainer_can_modify" => true)
             try
@@ -182,7 +191,7 @@ listener = GitHub.EventListener(auth = auth,
                 else
                     new_pr = GitHub.pull_requests(Repo(sinkrepo_name), auth=auth)[1][i]
                 end
-                body = "A benchmarking job has been scheduled in $(new_pr.html_url.uri)."
+                body = "A benchmarking job has been scheduled in $(new_pr.html_url.uri).\n\nCC: @mohamed82008"
             catch err
                 if :msg ∈ fieldnames(typeof(err))
                     error_msg = err.msg
@@ -190,21 +199,99 @@ listener = GitHub.EventListener(auth = auth,
                     error_msg = "Error"
                 end
                 body = "I could not schedule a benchmarking job."
-                if error_msg != ""
+                if error_msg != "" && error_msg != "Error"
                     body *= "\n\nError: \n ```julia \n $error_msg \n ```"
                 else
                     body *= "\n\nError: unidentified"
                 end
+                body *= "\n\nCC: @mohamed82008"
             end
         else
-            body = "Commit $(snipsha(sha)) and commit $(snipsha(base_sha)) have already been benchmarked before."
+            body = "Commit $(snipsha(sha)) and commit $(snipsha(base_sha)) have already been benchmarked before.\n\nCC: @mohamed82008"
         end
         params = Dict("body"=>body)
         GitHub.create_comment(repo, pr, :pr, params=params, auth=auth)
     end
+    logging[] = true
     return HTTP.Response(200)
 end
 
-listen(port=8000) = GitHub.run(listener, IPv4(127,0,0,1), port)
+mutable struct TuringListener
+    github_listener::EventListener
+    result_listener::Function
+end
+
+function TuringListener(github_listener::EventListener)
+    result_listener = (request) -> begin
+        data = JSON.parse(IOBuffer(HTTP.payload(request)))
+        if length(keys(data)) == 1 && haskey(data, "start")
+            branch_name = data["start"]
+            temp_dir = ".log_" * splitdir(sinkrepo_name)[2]
+            if isdir(temp_dir)
+                gitreset!(temp_dir, sinkrepo_name)
+            else
+                gitclone!(temp_dir, sinkrepo_name)
+            end
+            gitcheckout!(temp_dir, branch_name)
+            results_dir = joinpath(temp_dir, "benchmark_results")
+            isdir(results_dir) || mkdir(results_dir)
+            cd(results_dir)
+            isdir(branch_name) || mkdir(branch_name)
+            cd(branch_name)
+            return HTTP.Response(400)
+        end
+        if length(keys(data)) == 1 && haskey(data, "finish")
+            branch_name = data["finish"]
+            temp_dir = ".log_" * splitdir(sinkrepo_name)[2]
+            cd(joinpath("..", "..", ".."))
+            filepath = joinpath("src", "bench_shas.txt")
+            isfile(filepath) && rm(filepath)
+            gitadd!(temp_dir)
+            gitcommit!(temp_dir; message="Add benchmarking results for $branch_name. [ci skip]")
+            gitpush!(temp_dir, sinkrepo_name, branch_name)
+            gitreset!(temp_dir, sinkrepo_name)
+            i = find_pr(Repo(sinkrepo_name), "master", branch_name)
+            if i > 0
+                pr = GitHub.pull_requests(Repo(sinkrepo_name), auth=auth)[1][i]
+                sinkrepo_url = repo(Repo(sinkrepo_name)).html_url.uri
+                report_url = join([sinkrepo_url, "tree", branch_name, "benchmark_results", branch_name], "/")
+                body = "Benchmarking job has completed. You can access the results from $report_url."
+                params = Dict("body"=>body)
+                issue = GitHub.issue(repo, payload["issue"]["number"])
+                GitHub.create_comment(repo, issue, :issue, params=params, auth=auth)    
+                return HTTP.Response(400)    
+            end
+            logging[] = false
+            return HTTP.Response(400)
+        end
+
+        haskey(data, "turing") && haskey(data, "engine") || return
+        sha = snipsha(data["commit"])
+        isdir(sha) || mkdir(sha)
+        cd(sha) do
+            filename = data["name"] * data["engine"]
+            filename = replace(filename, [' ', ',', '('] => "_")
+            filename = replace(filename, [')', '.'] => "")
+            write(filename*".json", JSON.json(data))
+        end
+        return HTTP.Response(400)
+    end
+
+    return TuringListener(github_listener, result_listener)
+end
+
+function Base.run(listener::TuringListener, host::HTTP.IPAddr, port::Int, args...; kwargs...)
+    println("Listening for Turing GitHub events and benchmark results sent to $port;")
+    println("GitHub whitelisted events: $(isa(listener.github_listener.events, Nothing) ? "All" : listener.github_listener.events)")
+    HTTP.listen(host, port; kwargs...) do request::HTTP.Request
+        response = listener.result_listener(request)
+        response isa HTTP.Response && return response
+        listener.handle_request(request)
+    end
+end
+
+const turing_listener = TuringListener(github_listener)
+
+listen(port=8000) = GitHub.run(turing_listener, IPv4(127,0,0,1), port)
 
 end # module
