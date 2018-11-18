@@ -23,13 +23,14 @@ repo_url(repo_name) = "https://$username:$(authtoken)@github.com/$(repo_name).gi
 
 gitclone!(path, repo_name) = run(`git clone $(repo_url(repo_name)) $(path)`)
 
-function gitreset!(repo_name)
+function gitreset!(repo_name; branch_name = "master")
     run(`git fetch $(repo_url(repo_name))`)
-    run(`git reset --hard origin/master`)
+    run(`git reset --hard origin/$branch_name`)
 end
-gitreset!(path, repo_name) = cd(()->gitreset!(repo_name), path)
+gitreset!(path, repo_name; branch_name = "master") = cd(()->gitreset!(repo_name; branch_name = branch_name), path)
 
 function gitbranches(o="-l")
+    run(`git fetch origin`)
     drop2.(readlines(`git branch $o`))
 end
 gitbranches(path, o) = cd(()->gitbranches(o), path)
@@ -47,8 +48,12 @@ gitadd!(path) = cd(gitadd!, path)
 gitcommit!(; message=" ") = run(`git commit -m $message`)
 gitcommit!(path; message) = cd(()->gitcommit!(message=message), path)
 
-function gitpush!(repo_name, branch)
-    run(`git push -f $(repo_url(repo_name)) $branch`)
+function gitpush!(repo_name, branch; force = true)
+    if force
+        run(`git push -f $(repo_url(repo_name)) $branch`)
+    else
+        run(`git push $(repo_url(repo_name)) $branch`)
+    end
 end
 gitpush!(path, repo_name, branch) = cd(()->gitpush!(repo_name, branch), path)
 
@@ -101,10 +106,8 @@ function update_remote(shas)
     cd(srcdir)
     try
         filename = "bench_shas.txt"
-        if !("origin/$branch_name" in gitbranches("..", "-r"))
-            write("bench_shas.txt", join(shas, "\n"))
-            make_pr[] = true
-        end
+        write("bench_shas.txt", join(shas, "\n"))
+        make_pr[] = true
     catch err
         if :msg ∈ fieldnames(typeof(err))
             error_msg[] = err.msg
@@ -238,6 +241,7 @@ function TuringListener(github_listener::EventListener)
                 gitclone!(temp_dir, sinkrepo_name)
             end
             gitcheckout!(temp_dir, branch_name)
+            gitreset!(temp_dir, sinkrepo_name, branch_name=branch_name)
             results_dir = joinpath(temp_dir, "benchmark_results")
             isdir(results_dir) || mkdir(results_dir)
             cd(results_dir)
@@ -249,16 +253,24 @@ function TuringListener(github_listener::EventListener)
             !(logging[] && started[]) && return HTTP.Response(204)
             branch_name = data["finish"]
             temp_dir = ".log_" * splitdir(sinkrepo_name)[2]
+            shas = String[]
+            cd(joinpath("..", "..", "src")) do
+                shas = strip.(readlines("bench_shas.txt"))
+                rm("bench_shas.txt")
+            end
+            write_report!("report.md", shas, branch_name)
             cd(joinpath("..", "..", ".."))
-            filepath = joinpath("src", "bench_shas.txt")
-            isfile(filepath) && rm(filepath)
             gitadd!(temp_dir)
             gitcommit!(temp_dir; message="Add benchmarking results for $branch_name. [ci skip]")
-            gitpush!(temp_dir, sinkrepo_name, branch_name)
+            try
+                gitpush!(temp_dir, sinkrepo_name, branch_name)
+            catch
+                throw("Pushing to the remote branch $branch_name failed.")
+            end
             gitreset!(temp_dir, sinkrepo_name)
             sinkrepo_url = repo(Repo(sinkrepo_name)).html_url.uri
-            report_url = join([sinkrepo_url, "tree", branch_name, "benchmark_results", branch_name], "/")
-            body = "Benchmarking job has completed. You can access the results from $report_url."
+            report_url = join([sinkrepo_url, "tree", branch_name, "benchmark_results", branch_name, "report.md"], "/")
+            body = "Benchmarking job has completed. You can see a summary of the results in this [report]($report_url)."
             params = Dict("body"=>body)
             pr = GitHub.pull_request(Repo(sourcerepo_name), active_pr_number[])
             GitHub.create_comment(Repo(sourcerepo_name), pr, :pr, params=params, auth=auth)
@@ -270,10 +282,8 @@ function TuringListener(github_listener::EventListener)
 
         haskey(data, "turing") && haskey(data, "engine") || return
         logging[] && started[] || return HTTP.Response(204)
-        sha = snipsha(data["commit"])
-        filename = join([data["name"], data["engine"]], "_")
-        filename = replace(filename, [' ', ',', '('] => "_")
-        filename = replace(filename, [')', '.', ':'] => "")
+        sha = snipsha(data["turing_commit"])
+        filename = getfilename(data)
         filepath = joinpath(sha, filename)
         isdir(sha) || mkdir(sha)
         cd(sha) do
@@ -283,6 +293,106 @@ function TuringListener(github_listener::EventListener)
     end
 
     return TuringListener(github_listener, result_listener)
+end
+
+function getfilename(data)
+    filename = join([data["name"], data["engine"]], "_")
+    filename = replace(filename, [' ', ',', '('] => "_")
+    filename = replace(filename, [')', '.', ':'] => "")
+    filename
+end
+
+function write_report!(filename, shas, branch_name)
+    path_pairs = []
+    table = "| ID | time ratio |\n"
+    table *= "|----|------------|\n"
+    for f in readdir(snipsha(shas[1]))
+        path1 = joinpath(snipsha(shas[1]), f)
+        path2 = joinpath(snipsha(shas[2]), f)
+        if isfile(path1)
+            if isfile(path2)
+                push!(path_pairs, (path1, path2))
+            else
+                push!(path_pairs, (path1, nothing))
+            end
+        else
+            if isfile(path2)
+                push!(path_pairs, (nothing, path2))
+            end
+        end
+    end
+
+    function getratio(n2, n1)
+        r = round(n2 / n1, digits=2)
+        if r > 1
+            return string(r), " :x:"
+        else
+            return string(r), " :white_check_mark:"
+        end
+    end
+    bench_commit = ""
+    sinkrepo_url = repo(Repo(sinkrepo_name)).html_url.uri
+    report_base_url = join([sinkrepo_url, "tree", branch_name, "benchmark_results", branch_name], "/")
+    commit1_url = join([report_base_url, snipsha(shas[1])], "/")
+    commit2_url = join([report_base_url, snipsha(shas[2])], "/")
+    for (path1, path2) in path_pairs
+        if path1 != nothing
+            data1 = JSON.parse(IOBuffer(read(path1)))
+            id = "`" * join([data1["name"], data1["engine"]], " - ") * "`"
+            if !(haskey(data1, "turing") && haskey(data1["turing"], "elapsed"))
+                @goto path1_error
+            end
+            time1 = data1["turing"]["elapsed"]
+            if haskey(data1, "bench_commit")
+                bench_commit = data1["bench_commit"]
+            end
+            if path2 != nothing
+                data2 = JSON.parse(IOBuffer(read(path2)))
+                if !(haskey(data2, "turing") && haskey(data2["turing"], "elapsed"))
+                    @goto path2_error
+                end
+                time2 = data2["turing"]["elapsed"]
+                url1 = join([commit1_url, getfilename(data1)], "/") * ".json"
+                url2 = join([commit2_url, getfilename(data2)], "/") * ".json"
+                ratio, symbol = getratio(time2, time1)
+                table *= "$id | $ratio ([$time2]($url2) / [$time1]($url1)) $symbol |\n"
+            else
+                @label path2_error
+                table *= "$id | NA |\n"
+            end    
+        else
+            @label path1_error
+            if path2 != nothing
+                data2 = JSON.parse(IOBuffer(read(path2)))
+                if haskey(data1, "bench_commit")
+                    bench_commit = data2["bench_commit"]
+                end
+            end
+            table *= "$id | NA |\n"
+        end
+    end
+    table *= "\n"
+
+    content = """
+# Benchmark Report
+
+## Job properties
+
+*Turing Commits:*
+- *pr:* $(shas[2])
+- *master:* $(shas[1])
+
+*TuringBenchmarks commit:* $bench_commit
+
+## Results:
+
+Below is a table of this job's results, obtained by running the benchmarks found in
+[TuringLang/TuringBenchmarks](https://github.com/TuringLang/TuringBenchmarks). The table shows the time ratio of the 2 Turing commits benchmarked. A ratio greater than `1.0` denotes a possible regression (marked with :x:), while a ratio less than `1.0` denotes a possible improvement (marked with :white_check_mark:). Results are subject to noise so small fluctuations around `1.0` may be ignored.
+
+$table
+"""
+
+    write(filename, content)
 end
 
 function Base.run(listener::TuringListener, host::HTTP.IPAddr, port::Int, args...; kwargs...)
