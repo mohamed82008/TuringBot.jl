@@ -342,7 +342,7 @@ function write_report!(filename, shas, branch_name)
             if !(haskey(data1, "turing") && haskey(data1["turing"], "elapsed"))
                 @goto path1_error
             end
-            time1 = data1["turing"]["elapsed"]
+            time1 = round(data1["turing"]["elapsed"] * 1000, digits = 3)
             if haskey(data1, "bench_commit")
                 bench_commit = data1["bench_commit"]
             end
@@ -351,11 +351,11 @@ function write_report!(filename, shas, branch_name)
                 if !(haskey(data2, "turing") && haskey(data2["turing"], "elapsed"))
                     @goto path2_error
                 end
-                time2 = data2["turing"]["elapsed"]
+                time2 = round(data2["turing"]["elapsed"] * 1000, digits = 3)
                 url1 = join([commit1_url, getfilename(data1)], "/") * ".json"
                 url2 = join([commit2_url, getfilename(data2)], "/") * ".json"
                 ratio, symbol = getratio(time2, time1)
-                table *= "$id | $ratio ([$time2]($url2) / [$time1]($url1)) $symbol |\n"
+                table *= "$id | $ratio ([$time2 us]($url2) / [$time1 us]($url1)) $symbol |\n"
             else
                 @label path2_error
                 table *= "$id | NA |\n"
