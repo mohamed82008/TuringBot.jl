@@ -355,7 +355,7 @@ function write_report!(filename, shas, branch_name)
                 url1 = join([commit1_url, getfilename(data1)], "/") * ".json"
                 url2 = join([commit2_url, getfilename(data2)], "/") * ".json"
                 ratio, symbol = getratio(time2, time1)
-                table *= "$id | $ratio ([$time2 us]($url2) / [$time1 us]($url1)) $symbol |\n"
+                table *= "$id | $ratio ([$time2 ms]($url2) / [$time1 ms]($url1)) $symbol |\n"
             else
                 @label path2_error
                 table *= "$id | NA |\n"
