@@ -1,3 +1,5 @@
+**Abandoned in favour of `TuringBenchmarks.TuringBot` from https://github.com/TuringLang/TuringBenchmarks.**
+
 # Setting up `TuringBot`:
 
 1. Register on the ultrahook website to get an API key and username.
